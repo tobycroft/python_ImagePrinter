@@ -7,11 +7,13 @@ import sys
 import os
 import argparse
 from datetime import datetime
+import numpy as np
 
-def print_image(image_path, printer_name=None, orientation=0,
-                paper_width=76, paper_height=130, copies=1,
+
+def print_image(image_path, printer_name=None, orientation=270,
+                paper_width=68, paper_height=130, copies=1,
                 scale=100, margin=0, horizontal_offset=0,
-                vertical_offset=0, print_width=None):
+                vertical_offset=0, print_width=68):
     """
     增强版图片打印函数，支持自定义纸张尺寸和方向
 
@@ -32,7 +34,7 @@ def print_image(image_path, printer_name=None, orientation=0,
     # 打开图片并获取原始DPI
     try:
         img = Image.open(image_path)
-        dpi = img.info.get('dpi', (72, 72))  # 默认使用72 DPI
+        dpi = img.info.get('dpi', (203, 203))  # 默认使用72 DPI
         img.close()
     except Exception as e:
         print(f"无法打开图片: {e}")
@@ -104,19 +106,30 @@ def print_image(image_path, printer_name=None, orientation=0,
         elif orientation == 270:
             img = img.rotate(90, expand=True)
 
+        # 转换为RGB模式确保像素格式正确
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        width, height = img.size
+
+        # 使用更高效的方式创建位图
         dib = win32ui.CreateBitmap()
-        dib.CreateCompatibleBitmap(hdc, img.width, img.height)
+        dib.CreateCompatibleBitmap(hdc, width, height)
         mem_dc = hdc.CreateCompatibleDC()
         mem_dc.SelectObject(dib)
 
-        # 将图片数据复制到内存DC
-        for y in range(img.height):
-            for x in range(img.width):
-                color = img.getpixel((x, y))
-                # 处理RGBA图像
-                if isinstance(color, tuple) and len(color) > 3:
-                    color = color[:3]
-                mem_dc.SetPixel(x, y, win32api.RGB(*color))
+        # 将图片数据复制到内存DC (更高效的方法)
+        # 使用PIL获取所有像素数据
+        pixels = list(img.getdata())
+
+        # 设置位图数据
+        for y in range(height):
+            for x in range(width):
+                # 获取像素值 (R, G, B)
+                r, g, b = pixels[y * width + x]
+                # 设置像素 (使用RGB值)
+                mem_dc.SetPixel(x, y, win32api.RGB(r, g, b))
+
     except Exception as e:
         print(f"处理图片时出错: {e}")
         hdc.EndDoc()
@@ -126,8 +139,8 @@ def print_image(image_path, printer_name=None, orientation=0,
     scale_factor = scale / 100.0
 
     # 计算图片尺寸（考虑DPI）
-    img_width_inch = img.width / dpi[0]
-    img_height_inch = img.height / dpi[1]
+    img_width_inch = width / dpi[0]
+    img_height_inch = height / dpi[1]
 
     # 转换为设备单位（twips）
     img_width_twips = int(img_width_inch * 1440 * scale_factor)
@@ -144,14 +157,25 @@ def print_image(image_path, printer_name=None, orientation=0,
     x_pos = margin_twips + horizontal_offset_twips
     y_pos = margin_twips + vertical_offset_twips
 
-    # 绘制图片
-    hdc.StretchBlt(
-        x_pos, y_pos,
-        img_width_twips, img_height_twips,
-        mem_dc,
-        0, 0, img.width, img.height,
-        win32con.SRCCOPY
-    )
+    # 创建源矩形和目标矩形
+    src_rect = (0, 0, width, height)
+    dst_rect = (x_pos, y_pos, x_pos + img_width_twips, y_pos + img_height_twips)
+
+    # 绘制图片 - 使用矩形参数
+    try:
+        hdc.StretchBlt(
+            (x_pos, y_pos),  # 目标起点 (twips)
+            (img_width_twips, img_height_twips),  # 目标尺寸 (twips)
+            mem_dc,  # 源设备上下文
+            (0, 0),  # 源起点 (像素)
+            (width, height),  # 源尺寸 (像素)
+            win32con.SRCCOPY  # 光栅操作码
+        )
+    except Exception as e:
+        print(f"绘制图片时出错: {e}")
+        hdc.EndPage()
+        hdc.EndDoc()
+        return False
 
     # 结束打印作业
     hdc.EndPage()
@@ -166,6 +190,7 @@ def print_image(image_path, printer_name=None, orientation=0,
     print(f"成功发送打印作业到 {printer_name}")
     return True
 
+
 def list_printers():
     """列出所有可用的打印机"""
     printers = win32print.EnumPrinters(
@@ -173,7 +198,8 @@ def list_printers():
     )
     print("\n可用的打印机:")
     for i, printer in enumerate(printers):
-        print(f"{i+1}. {printer[2]}")
+        print(f"{i + 1}. {printer[2]}")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -246,6 +272,7 @@ def main():
         print("打印作业已成功提交!")
     else:
         print("打印过程中出现错误")
+
 
 if __name__ == "__main__":
     main()
